@@ -1,121 +1,126 @@
-const socket = io();
+const chatNamespace = io("/chat", {
+  auth: {
+    token: 123456,
+  },
+});
 
-// Elements
-const $messageForm = document.querySelector("#message-form");
-const $messageFormInput = $messageForm.querySelector("input");
-const $messageFormButton = $messageForm.querySelector("button");
-const $sendLocationBtn = document.querySelector("#send-location");
-const $messages = document.querySelector("#messages");
+// Query DOM
+const messageInput = document.getElementById("messageInput");
+const chatForm = document.getElementById("chatForm");
+const chatBox = document.getElementById("chat-box");
+const feedback = document.getElementById("feedback");
+const onlineUsers = document.getElementById("online-users-list");
+const chatContainer = document.getElementById("chatContainer");
+const pvChatForm = document.getElementById("pvChatForm");
+const pvMessageInput = document.getElementById("pvMessageInput");
+const modalTitle = document.getElementById("modalTitle");
+const pvChatMessage = document.getElementById("pvChatMessage");
 
-// Templates
-const messageTemplate = document.querySelector("#message-template").innerHTML;
-const locationMessageTemplate = document.querySelector("#location-message-template").innerHTML;
-const sidebarTemplate = document.querySelector("#sidebar-template").innerHTML;
+const nickname = localStorage.getItem("nickname");
+const roomNumber = localStorage.getItem("chatroom");
+let socketId;
 
-// Options
-const { username, room } = Qs.parse(location.search, { ignoreQueryPrefix: true });
+// Emit Events
+chatNamespace.emit("login", { nickname, roomNumber });
 
-const autoscroll = () => {
-  // New message element
-  const $newMessage = $messages.lastElementChild;
-
-  // Height of the new message
-  const newMessageStyles = getComputedStyle($newMessage);
-  const newMessageMargin = parseInt(newMessageStyles.marginBottom);
-  const newMessageHeight = $newMessage.offsetHeight + newMessageMargin;
-
-  // Visible height
-  const visibleHeight = $messages.offsetHeight;
-
-  // Height of messages container
-  const containerHeight = $messages.scrollHeight;
-
-  // How far have I scrolled?
-  const scrollOffset = $messages.scrollTop + visibleHeight;
-
-  if (containerHeight - newMessageHeight <= scrollOffset) {
-    $messages.scrollTop = $messages.scrollHeight;
+chatForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (messageInput.value) {
+    chatNamespace.emit("chat message", {
+      message: messageInput.value,
+      nickname,
+      roomNumber,
+    });
+    messageInput.value = "";
   }
-};
-
-socket.on("message", message => {
-  const html = Mustache.render(messageTemplate, {
-    username: message.username,
-    message: message.text,
-    createdAt: moment(message.createdAt).format("h:mm a")
-  });
-
-  $messages.insertAdjacentHTML("beforeend", html);
-  autoscroll();
 });
 
-socket.on("locationMessage", message => {
-  console.log(message);
-  const html = Mustache.render(locationMessageTemplate, {
-    username: message.username,
-    url: message.url,
-    createdAt: moment(message.createdAt).format("h:mm a")
-  });
-
-  $messages.insertAdjacentHTML("beforeend", html);
-});
-
-socket.on("roomData", ({ room, users }) => {
-  const html = Mustache.render(sidebarTemplate, {
-    room,
-    users
-  });
-
-  document.querySelector("#sidebar").innerHTML = html;
-});
-
-$messageForm.addEventListener("submit", e => {
+pvChatForm.addEventListener("submit", (e) => {
   e.preventDefault();
 
-  $messageFormButton.setAttribute("disabled", "disabled");
+  chatNamespace.emit("pvChat", {
+    message: pvMessageInput.value,
+    name: nickname,
+    to: socketId,
+    from: chatNamespace.id,
+  });
 
-  const message = e.target.elements.message.value;
+  $("#pvChat").modal("hide");
+  pvMessageInput.value = "";
+});
 
-  socket.emit("sendMessage", message, error => {
-    $messageFormButton.removeAttribute("disabled");
-    $messageFormInput.value = "";
-    $messageFormInput.focus();
+// Listening
+chatNamespace.on("chat message", (data) => {
+  feedback.innerHTML = "";
+  chatBox.innerHTML += `<li class="alert alert-light">
+                            <span
+                                class="text-dark font-weight-normal"
+                                style="font-size: 13pt"
+                                >${data.nickname}
+                                
+                            <span
+                                class="
+                                    text-muted
+                                    font-italic font-weight-light
+                                    m-2
+                                "
+                                style="font-size: 9pt"
+                                >${data.date} hours</span
+                            >
+                            <p
+                                class="alert alert-info mt-2"
+                                style="font-family: persian01"
+                            >
+                            ${data.message}
+                            </p>
+                            </li>`;
+  chatContainer.scrollTop =
+    chatContainer.scrollHeight - chatContainer.clientHeight;
+});
 
-    if (error) {
-      return console.log(error);
-    } else {
-      console.log("Message delivered!");
+messageInput.addEventListener("keypress", (e) => {
+  chatNamespace.emit("typing", { name: nickname, roomNumber });
+});
+
+chatNamespace.on("typing", (data) => {
+  if (roomNumber == data.roomNumber) {
+    feedback.innerHTML = data;
+  }
+});
+
+chatNamespace.on("pvChat", (data) => {
+  $("#pvChat").modal("show");
+  socketId = data.from;
+  modalTitle.innerHTML = "Received message from " + data.name;
+  pvChatMessage.style.display = "block";
+  pvChatMessage.innerHTML = data.name + " : " + data.message;
+});
+
+chatNamespace.on("online", (data) => {
+  onlineUsers.innerHTML = "";
+  data.forEach((user) => {
+    if (roomNumber == user.roomNumber) {
+      onlineUsers.innerHTML += `
+            <li>
+            <button type="button" class="btn btn-light mx-2 p-2" data-toggle="modal" data-target="#pvChat" data-id=${
+              user.id
+            } data-client=${user.name}
+            ${user.id === chatNamespace.id ? "disabled" : ""}>
+            ${user.name}
+            <span class="badge badge-success"> </span>
+            </buton>
+            </li>
+        `;
     }
   });
 });
 
-$sendLocationBtn.addEventListener("click", () => {
-  if (!navigator.geolocation) {
-    return alert("Geolocation is not supported by your browser.");
-  } else {
-    $sendLocationBtn.setAttribute("disabled", "disabled");
+// jQuery
+$("#pvChat").on("show.bs.modal", function (e) {
+  var button = $(e.relatedTarget);
+  var user = button.data("client");
+  socketId = button.data("id");
 
-    navigator.geolocation.getCurrentPosition(position => {
-      socket.emit(
-        "sendLocation",
-        {
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude
-        },
-        error => {
-          $sendLocationBtn.removeAttribute("disabled");
-          if (!error) {
-            console.log("Location shared!");
-          }
-        }
-      );
-    });
-  }
-});
-
-socket.emit("join", { username, room }, error => {
-  if (error) {
-    alert(error);
-    location.href = "/";
-  }
+  modalTitle.innerHTML = "Send message to " + user;
+  pvChatMessage.style.display = "none";
 });
